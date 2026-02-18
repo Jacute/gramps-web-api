@@ -30,7 +30,7 @@ from celery import Task, shared_task
 from celery.result import AsyncResult
 from flask import current_app
 from gramps.gen.db import DbTxn
-from gramps.gen.db.base import DbReadBase
+from gramps.gen.db.base import DbReadBase, DbWriteBase
 from gramps.gen.errors import HandleError
 from gramps.gen.lib.json_utils import object_to_dict
 from gramps.gen.lib.primaryobj import PrimaryObject
@@ -46,7 +46,7 @@ from .export import prepare_options, run_export
 from .media import get_media_handler
 from .media_importer import MediaImporter
 from .report import run_report
-from .resources.delete import delete_all_objects, delete_object
+from .resources.delete import delete_all_objects, delete_object_with_trans
 from .resources.util import (
     abort_with_message,
     add_object,
@@ -289,7 +289,7 @@ def restore_db(
     and insert new objects, update objects if handle is equal and delete
     objects which not in backup
     """
-    db_handle = get_db_handle(readonly=False)
+    db_handle: DbWriteBase = get_db_handle(readonly=False)
     backup_db_handle = in_memory_import(file_name, extension, delete, self)
 
     people_count = 0
@@ -299,11 +299,10 @@ def restore_db(
             obj_handle = obj.get_handle()
             try:
                 method_name = f"get_{obj_type}_from_handle"
-                print(method_name)
                 new_obj = backup_db_handle.method(method_name)(obj_handle)
                 people_count += 1
             except HandleError:  # object not found in backup_db_handle
-                delete_object(db_handle, obj_handle, obj_type)
+                delete_object_with_trans(db_handle, obj_handle, obj_type, trans)
                 continue
 
             # update obj to new_obj in current_db
@@ -320,15 +319,24 @@ def restore_db(
             )
             people_count += 1
         check_quota_people(to_add=people_count, tree=tree, user_id=user_id)
-
-    # update search index
-    trans_dict = transaction_to_json(trans)
-    run_task(
-        update_search_indices_from_transaction,
-        trans_dict=trans_dict,
+    update_usage_people(tree=tree, user_id=user_id)
+    _search_reindex_incremental(
         tree=tree,
         user_id=user_id,
+        semantic=False,
+        progress_cb=progress_callback_count(
+            self, title="Updating full-text search index..."
+        ),
     )
+    if current_app.config.get("VECTOR_EMBEDDING_MODEL"):
+        _search_reindex_incremental(
+            tree=tree,
+            user_id=user_id,
+            semantic=True,
+            progress_cb=progress_callback_count(
+                self, title="Updating semantic search index..."
+            ),
+        )
 
 
 @shared_task(bind=True)

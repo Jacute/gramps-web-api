@@ -558,6 +558,18 @@ def delete_object(
     return trans_dict
 
 
+def delete_object_with_trans(
+    db_handle: DbWriteBase, handle: str, gramps_class_name: str, trans: DbTxn
+) -> List[Dict[str, Any]]:
+    """Delete the object and its references."""
+    key = gramps_class_name.lower()
+    try:
+        method = delete_methods[key]
+    except KeyError:
+        raise NotImplementedError(gramps_class_name)
+    method(db_handle, handle, trans=trans)
+
+
 def delete_all_objects(
     db_handle: DbWriteBase,
     namespaces: Optional[List[str]] = None,
