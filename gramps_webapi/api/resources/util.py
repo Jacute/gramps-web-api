@@ -1520,11 +1520,13 @@ def run_import(
             return
 
 
-def dry_run_import(
+def in_memory_import(
     file_name: FilenameOrPath,
     extension: str,
-) -> Optional[dict[str, int]]:
-    """Import a file into an in-memory database and returns object counts."""
+    delete: bool,
+    task: Optional[Task] = None,
+) -> DbWriteBase:
+    """Import a file into an in-memory database and returns database handle."""
     db_handle = make_database("sqlite")
     db_handle.load(":memory:")
     db_handle.set_feature("skip-import-additions", True)
@@ -1540,8 +1542,21 @@ def dry_run_import(
         config.get("preferences.nprefix"),
     )
     run_import(
-        db_handle=db_handle, file_name=file_name, extension=extension, delete=False
+        db_handle=db_handle,
+        file_name=file_name,
+        extension=extension,
+        delete=delete,
+        task=task,
     )
+    return db_handle
+
+
+def dry_run_import(
+    file_name: FilenameOrPath,
+    extension: str,
+) -> Optional[dict[str, int]]:
+    """Import a file into an in-memory database and returns object counts."""
+    db_handle = in_memory_import(file_name, extension, delete=False)
     result = {
         "people": db_handle.get_number_of_people(),
         "families": db_handle.get_number_of_families(),

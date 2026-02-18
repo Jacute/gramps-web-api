@@ -33,6 +33,7 @@ from gramps.gen.db import DbTxn
 from gramps.gen.db.base import DbReadBase
 from gramps.gen.errors import HandleError
 from gramps.gen.lib.json_utils import object_to_dict
+from gramps.gen.lib.primaryobj import PrimaryObject
 from gramps.gen.merge.diff import diff_items
 
 from gramps_webapi.api.search.indexer import SearchIndexer, SemanticSearchIndexer
@@ -45,13 +46,16 @@ from .export import prepare_options, run_export
 from .media import get_media_handler
 from .media_importer import MediaImporter
 from .report import run_report
-from .resources.delete import delete_all_objects
+from .resources.delete import delete_all_objects, delete_object
 from .resources.util import (
     abort_with_message,
+    add_object,
     app_has_semantic_search,
     dry_run_import,
+    in_memory_import,
     run_import,
     transaction_to_json,
+    update_object,
 )
 from .search import get_search_indexer, get_semantic_search_indexer
 from .telemetry import (
@@ -64,12 +68,14 @@ from .util import (
     check_quota_people,
     close_db,
     get_config,
+    get_db_handle,
     get_db_outside_request,
     gramps_object_from_dict,
     send_email,
     update_usage_people,
     upgrade_gramps_database,
 )
+from ..util.db import iter_all_objects
 
 
 def run_task(task: Task, **kwargs) -> Union[AsyncResult, Any]:
@@ -271,6 +277,58 @@ def import_file(
                 self, title="Updating semantic search index..."
             ),
         )
+
+
+@shared_task(bind=True)
+def restore_db(
+    self, tree: str, user_id: str, file_name: str, extension: str, delete: bool = True
+):
+    """Restore database from backup file.
+
+    This function load database from file in memory, compare objects
+    and insert new objects, update objects if handle is equal and delete
+    objects which not in backup
+    """
+    db_handle = get_db_handle(readonly=False)
+    backup_db_handle = in_memory_import(file_name, extension, delete, self)
+
+    people_count = 0
+    with DbTxn("Restore db", db_handle) as trans:
+        # iterates on all objects and compare them handles in current db
+        for obj_type, obj in iter_all_objects(db_handle):
+            obj_handle = obj.get_handle()
+            try:
+                method_name = f"get_{obj_type}_from_handle"
+                print(method_name)
+                new_obj = backup_db_handle.method(method_name)(obj_handle)
+                people_count += 1
+            except HandleError:  # object not found in backup_db_handle
+                delete_object(db_handle, obj_handle, obj_type)
+                continue
+
+            # update obj to new_obj in current_db
+            update_object(db_handle, new_obj, trans)
+        # iterates on backup objects and insert new
+        for obj_type, obj in iter_all_objects(backup_db_handle):
+            obj_handle = obj.get_handle()
+
+            add_object(
+                db_handle=db_handle,
+                obj=obj,
+                trans=trans,
+                fail_if_exists=False,
+            )
+            people_count += 1
+        check_quota_people(to_add=people_count, tree=tree, user_id=user_id)
+
+    # update search index
+    trans_dict = transaction_to_json(trans)
+    run_task(
+        update_search_indices_from_transaction,
+        trans_dict=trans_dict,
+        tree=tree,
+        user_id=user_id,
+    )
 
 
 @shared_task(bind=True)

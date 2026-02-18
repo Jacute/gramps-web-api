@@ -49,7 +49,7 @@ from flask_jwt_extended.exceptions import WrongTokenError
 from gramps.cli.clidbman import NAME_FILE, CLIDbManager
 from gramps.gen.config import config
 from gramps.gen.const import GRAMPS_LOCALE
-from gramps.gen.db.base import DbReadBase
+from gramps.gen.db.base import DbReadBase, DbWriteBase
 from gramps.gen.db.dbconst import (
     CITATION_KEY,
     DBBACKEND,
@@ -515,10 +515,7 @@ def get_buffer_for_file(filename: str, delete=True, not_found=False) -> BinaryIO
 
 
 def _resolve_smtp_config(
-    use_ssl: bool | None,
-    use_starttls: bool | None,
-    use_tls: bool | None,
-    port: int
+    use_ssl: bool | None, use_starttls: bool | None, use_tls: bool | None, port: int
 ) -> tuple[bool, bool]:
     """Helper to resolve SMTP encryption settings.
 
